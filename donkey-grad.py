@@ -2,6 +2,7 @@ from keras.preprocessing import image
 from keras.models import load_model
 from tensorflow.python.framework import ops
 import keras.backend as K
+import datetime
 import tensorflow as tf
 import numpy as np
 import keras
@@ -64,17 +65,23 @@ def modify_backprop(model, name):
         new_model = load_model(modelpath)
     return new_model
 
+functions = {}
+
 def grad_cam(input_model, image, category_index, layer_name):
     model = input_model
     nb_classes = 15
+    f = None
 
-    loss = model.output[0][:, category_index]
-    conv_output = model.get_layer(layer_name).output
-    #grads = normalize(K.gradients(loss, conv_output)[0])
-    grads = normalize(K.gradients(loss, conv_output)[0])
-    gradient_function = K.function([model.input, K.learning_phase()], [conv_output, grads])
+    if category_index in functions:
+        f = functions[category_index]
+    else:
+        loss = model.output[0][:, category_index]
+        conv_output = model.get_layer(layer_name).output
+        grads = normalize(K.gradients(loss, conv_output)[0])
+        f = K.function([model.input, K.learning_phase()], [conv_output, grads])
+        functions[category_index] = f
 
-    output, grads_val = gradient_function([image, 1])
+    output, grads_val = f([image, 1])
     output, grads_val = output[0, :], grads_val[0, :, :, :]
 
     weights = np.mean(grads_val, axis = (0, 1))
@@ -117,23 +124,30 @@ if len(sys.argv) < 2:
 IMGDIR = sys.argv[1]
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-video = cv2.VideoWriter('output.mp4', fourcc, 20., (160, 120))
+video = cv2.VideoWriter('output.mp4', fourcc, 20., (160 * 4, 120 * 4))
 
-nfiles = len(os.listdir(IMGDIR))
-for ifile, fname in enumerate(os.listdir(IMGDIR)):
+files = os.listdir(IMGDIR)
+files = [f for f in files if f[-3:] =='jpg']
+files.sort()
+
+nfiles = len(files)
+for ifile, fname in enumerate(files):
     path = os.path.join(IMGDIR, fname)
-    if '.jpg' not in path: continue
     original_input = load_image(path)
     preprocessed_input = norm_img(original_input)
     predictions = model.predict(preprocessed_input)
     predicted_class = np.argmax(predictions[0][0])
+    # ts = datetime.datetime.now()
     cam, heatmap = grad_cam(model, preprocessed_input, predicted_class, 'conv2d_5')
-    if (ifile % 100 == 0): print('%.2f' % (ifile*100./nfiles))
-    img = np.uint8( original_input[0] )
+    # print(str(predicted_class) + '  ' + str(datetime.datetime.now() - ts))
+    if (ifile % 100 == 0): print('%.2f %s' % (ifile*100./nfiles, str(datetime.datetime.now())))
+    # img = np.uint8(original_input[0])
+    # img = mix_heatmap(img, heatmap)
     img = mix_heatmap(original_input, heatmap)
     #cv2.imwrite("gradcam.jpg", img)
     #video.write(original_input[0])
+    img = cv2.resize(img, (0, 0), fx = 4, fy = 4, interpolation = cv2.INTER_LINEAR)
     video.write(img)
-    if (ifile > 300): break
+    if (ifile > 1000): break
 
 video.release()
